@@ -1,0 +1,32 @@
+# Muhit o'zgaruvchilari (TOKEN saqlangan fayl - hech qachon GitHubga yuklanmasin!)
+.env
+
+# SQLite bazalar
+*.db
+*.sqlite
+
+# Backup papkasi
+backups/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE fayllar
+.idea/
+.vscode/
+*.swp
+
+# OS fayllar
+.DS_Store
+Thumbs.db
+
+# Log fayllar
+*.log
