@@ -1,0 +1,126 @@
+# 🏭 A Tex Sanoat — ERP Telegram Bot
+
+Tikuvchilik fabrikasi uchun ishlab chiqilgan **Telegram ERP tizimi**. Bichuv, razdacha va chevarlar o'rtasidagi ish oqimini boshqaradi.
+
+---
+
+## 📋 Imkoniyatlar
+
+| Rol | Funksiyalar |
+|---|---|
+| 👑 **Admin** | Kunlik hisobot, hodimlar ro'yxati, narx belgilash, bazani tozalash |
+| ✂️ **Bichuvchi** | Yangi model kiritish, razdachaga yuborish |
+| 📦 **Razdacha** | Bichuvdan qabul, chevarga berish, ombor boshqaruvi, hisobot |
+| 🧵 **Chevar** | Ish qabul qilish, tikish, topshirish, balans ko'rish |
+
+---
+
+## ⚙️ O'rnatish
+
+### 1. Repozitoriyni klonlash
+```bash
+git clone https://github.com/YOUR_USERNAME/atex-erp-bot.git
+cd atex-erp-bot
+```
+
+### 2. Virtual muhit yaratish (tavsiya etiladi)
+```bash
+python -m venv venv
+source venv/bin/activate        # Linux/Mac
+venv\Scripts\activate           # Windows
+```
+
+### 3. Kutubxonalarni o'rnatish
+```bash
+pip install -r requirements.txt
+```
+
+### 4. `.env` faylini sozlash
+```bash
+cp .env.example .env
+```
+`.env` faylini oching va o'z tokeningizni kiriting:
+```
+BOT_TOKEN=1234567890:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+> 🔑 Botni [@BotFather](https://t.me/BotFather) orqali yaratib, token oling.
+
+### 5. Botni ishga tushirish
+```bash
+python bot.py
+```
+
+---
+
+## 📁 Loyiha tuzilmasi
+
+```
+atex-erp-bot/
+├── bot.py              # Asosiy bot kodi
+├── requirements.txt    # Python kutubxonalari
+├── .env.example        # Muhit o'zgaruvchilari namunasi
+├── .env                # Sizning tokeningiz (GitHubga yuklanmaydi!)
+├── .gitignore          # Git ignore qoidalari
+├── README.md           # Ushbu fayl
+└── backups/            # Avtomatik baza backuplari (auto-yaratiladi)
+```
+
+---
+
+## 🗄️ Ma'lumotlar bazasi
+
+Bot `fabrika.db` SQLite bazasini ishlatadi. Quyidagi jadvallar mavjud:
+
+- **`hodimlar`** — Foydalanuvchilar (admin, bichuvchi, razdacha, chevarlar)
+- **`bichuv_ombor`** — Bichilgan mahsulotlar ombori
+- **`razdacha_ombor`** — Razdacha ombori
+- **`ishlar`** — Chevarlar uchun joriy ishlar
+- **`bitgan_ishlar`** — Yakunlangan ishlar tarixi
+- **`tariflar`** — Narx belgilash jadvali
+
+---
+
+## 👥 Standart foydalanuvchilar
+
+Bot birinchi ishga tushganda quyidagi hodimlar avtomatik qo'shiladi:
+
+| ID | Parol | Ism | Rol |
+|---|---|---|---|
+| `445178136` | `admin710` | Boshliq | Admin |
+| `701` | `razdacha701` | Razdacha | Razdacha |
+| `705` | `bichuv705` | Bichuvchi | Bichuvchi |
+| `101-200` | `chevar{id}` | Chevar {id} | Chevar |
+
+> ⚠️ Ishga tushirgandan so'ng parollarni o'zgartirish tavsiya etiladi.
+
+---
+
+## 🔒 Xavfsizlik
+
+- `.env` fayliga **hech qachon** tokeningizni GitHub-ga yuklamang
+- `.gitignore` faylida `.env` allaqachon qo'shilgan
+- Adminning bazani tozalash funksiyasi `Mz12345` tasdiqlash kodi bilan himoyalangan
+
+---
+
+## 📦 Backup tizimi
+
+Bot har ishga tushganda `fabrika.db` ni `backups/` papkasiga avtomatik nusxalaydi:
+```
+backups/backup_22_03_14_30.db
+```
+
+---
+
+## 🛠️ Texnik ma'lumotlar
+
+- **Python:** 3.9+
+- **Framework:** [aiogram 3.x](https://docs.aiogram.dev/)
+- **Baza:** SQLite 3
+- **Arxitektura:** FSM (Finite State Machine) asosida
+
+---
+
+## 📝 Litsenziya
+
+Ushbu loyiha shaxsiy foydalanish uchun mo'ljallangan.
