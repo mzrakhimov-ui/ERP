@@ -63,6 +63,8 @@ class ChevarQaytarishState(StatesGroup):
 def init_db():
     conn = sqlite3.connect("fabrika.db")
     cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
     # Hodimlar jadvaliga 'sana' ustuni qo'shildi
     cursor.execute('''CREATE TABLE IF NOT EXISTS hodimlar (
         id INTEGER PRIMARY KEY, 
@@ -271,7 +273,7 @@ async def admin_db_execute(m: types.Message, state: FSMContext):
 
 
 # ================= BICHUV BO'LIMI =================
-@dp.message(F.text == "✂️ Bichildi")
+@dp.message(F.text == "✂️ Bichildi", StateFilter("*"))
 async def bich_1(m: types.Message, state: FSMContext):
     await state.set_state(BichuvState.nomi)
     await m.answer("👗 Model nomi:", reply_markup=back_kb())
@@ -350,8 +352,9 @@ async def bich_final_confirm(m: types.Message, state: FSMContext):
         await m.answer("🚫 Ma'lumotlar bekor qilindi.", reply_markup=get_main_menu('bichuvchi'))
         await state.clear()
 
-@dp.message(F.text == "🚚 Razdachaga ish yuborish")
-async def bich_send(m: types.Message):
+@dp.message(F.text == "🚚 Razdachaga ish yuborish", StateFilter("*"))
+async def bich_send(m: types.Message, state: FSMContext):
+    await state.clear()
     conn = sqlite3.connect("fabrika.db")
     items = conn.execute("SELECT kod, model, SUM(soni) FROM bichuv_ombor WHERE status=0 GROUP BY kod").fetchall()
     conn.close()
@@ -391,8 +394,9 @@ async def b_cancel_send_cb(cb: types.CallbackQuery):
 
 # ================= RAZDACHA BO'LIMI =================
 
-@dp.message(F.text == "📥 Bichuvdan ish olish")
-async def raz_rec(m: types.Message):
+@dp.message(F.text == "📥 Bichuvdan ish olish", StateFilter("*"))
+async def raz_rec(m: types.Message, state: FSMContext):
+    await state.clear()
     conn = sqlite3.connect("fabrika.db")
     items = conn.execute("SELECT kod, model, SUM(soni) FROM bichuv_ombor WHERE status=1 GROUP BY kod").fetchall()
     conn.close()
@@ -435,7 +439,7 @@ async def r_rej_cb(cb: types.CallbackQuery):
     conn.close()
     await cb.message.edit_text(f"❌ Kod {kod} rad etildi va bichuvga qaytarildi.")
 
-@dp.message(F.text == "✂️ Chevarga ish berish")
+@dp.message(F.text == "✂️ Chevarga ish berish", StateFilter("*"))
 async def raz_give_1(m: types.Message, state: FSMContext):
     await state.set_state(RazdachaState.target_ch)
     await m.answer("👤 Chevar kodi (Masalan: 101):", reply_markup=back_kb())
@@ -477,7 +481,9 @@ async def raz_give_3(m: types.Message, state: FSMContext):
         kb.row(types.KeyboardButton(text="🏠 Asosiy sahifa")).adjust(3)
         await state.set_state(RazdachaState.razmer_tanlash)
         await m.answer("📏 Razmerni tanlang:", reply_markup=kb.as_markup(resize_keyboard=True))
-    except Exception: await m.answer("⚠️ Iltimos, modelni menudan tanlang!")
+    except Exception as e:
+        logging.error(f"raz_give_3 xatosi: {e}")
+        await m.answer("⚠️ Iltimos, modelni menudan tanlang!")
 
 @dp.message(RazdachaState.razmer_tanlash)
 async def raz_give_4(m: types.Message, state: FSMContext):
@@ -496,14 +502,14 @@ async def raz_give_5(m: types.Message, state: FSMContext):
     stock = res[0] if res else 0
     if soni > stock: return await m.answer(f"❌ Omborda faqat {stock} ta bor!")
     await state.update_data(soni=soni)
-    kb = ReplyKeyboardBuilder().row(types.KeyboardButton(text="✅ Xa"), types.KeyboardButton(text="❌ Yo'q"))
+    kb = ReplyKeyboardBuilder().row(types.KeyboardButton(text="✅ Ha"), types.KeyboardButton(text="❌ Yo'q"))
     confirm_text = f"⚠️ Ma'lumotni tasdiqlaysizmi?\n\n👤 Chevar: {d['ch_ism']}\n👗 Model: {d['mod']} ({d['kod']})\n📏 Razmer: {d['raz']}\n🔢 Soni: {soni} ta"
     await state.set_state(RazdachaState.tasdiqlash)
     await m.answer(confirm_text, reply_markup=kb.as_markup(resize_keyboard=True))
 
 @dp.message(RazdachaState.tasdiqlash)
 async def raz_give_final(m: types.Message, state: FSMContext):
-    if m.text == "✅ Xa":
+    if m.text == "✅ Ha":
         d = await state.get_data()
         conn = sqlite3.connect("fabrika.db")
         biri = conn.execute("SELECT id FROM hodimlar WHERE chat_id=?", (m.from_user.id,)).fetchone()
@@ -523,8 +529,9 @@ async def raz_give_final(m: types.Message, state: FSMContext):
         await state.clear()
 # --- RAZDACHA MONITORING ---
 
-@dp.message(F.text == "⏳ Kutilayotgan ishlar")
-async def raz_pending_works(m: types.Message):
+@dp.message(F.text == "⏳ Kutilayotgan ishlar", StateFilter("*"))
+async def raz_pending_works(m: types.Message, state: FSMContext):
+    await state.clear()
     conn = sqlite3.connect("fabrika.db")
     pending = conn.execute("SELECT i.id, h.ism, i.model, i.kod, i.razmer, i.umumiy_soni, i.vaqt FROM ishlar i JOIN hodimlar h ON i.chevar_id = h.id WHERE i.status = 'kutilmoqda'").fetchall()
     conn.close()
@@ -550,8 +557,9 @@ async def raz_cancel_pending_work(cb: types.CallbackQuery):
         conn.close()
         await cb.answer("❌ Bu ish allaqachon bekor qilingan.", show_alert=True)
 
-@dp.message(F.text == "🧵 Tikuvdagi topshiriqlar")
-async def raz_tikuv_menu(m: types.Message):
+@dp.message(F.text == "🧵 Tikuvdagi topshiriqlar", StateFilter("*"))
+async def raz_tikuv_menu(m: types.Message, state: FSMContext):
+    await state.clear()
     kb = InlineKeyboardBuilder()
     kb.row(
         types.InlineKeyboardButton(text="📋 Ro'yxat", callback_data="tikuv_royxat_0"),
@@ -932,8 +940,9 @@ async def process_ch_reject(cb: types.CallbackQuery):
 
 # ================= RAZDACHA BO'LIMI =================
 
-@dp.message(F.text == "🏁 Chevardan ish olish")
-async def raz_from_ch_list(m: types.Message):
+@dp.message(F.text == "🏁 Chevardan ish olish", StateFilter("*"))
+async def raz_from_ch_list(m: types.Message, state: FSMContext):
+    await state.clear()
     conn = sqlite3.connect("fabrika.db")
     chevarlar = conn.execute("""
         SELECT DISTINCT i.chevar_id, h.ism 
@@ -1005,8 +1014,9 @@ async def raz_v_rej_cb(cb: types.CallbackQuery):
 
 # ================= ASOSIY VA STATISTIKA =================
 
-@dp.message(F.text == "📦 Ombor holati")
-async def raz_ombor_status(m: types.Message):
+@dp.message(F.text == "📦 Ombor holati", StateFilter("*"))
+async def raz_ombor_status(m: types.Message, state: FSMContext):
+    await state.clear()
     conn = sqlite3.connect("fabrika.db")
     items = conn.execute("SELECT model, kod, razmer, soni FROM razdacha_ombor WHERE soni > 0 ORDER BY model ASC").fetchall()
     conn.close()
@@ -1021,9 +1031,14 @@ async def raz_ombor_status(m: types.Message):
         txt += f"   • R:{i[2]} — {i[3]} ta\n"
     await m.answer(txt, parse_mode="Markdown")
 
-@dp.message(F.text == "📊 Kunlik malumotlar")
-async def admin_stats(m: types.Message):
+@dp.message(F.text == "📊 Kunlik malumotlar", StateFilter("*"))
+async def admin_stats(m: types.Message, state: FSMContext):
+    await state.clear()
     conn = sqlite3.connect("fabrika.db")
+    user = conn.execute("SELECT rol FROM hodimlar WHERE chat_id=?", (m.from_user.id,)).fetchone()
+    if not user or user[0] != 'admin':
+        conn.close()
+        return await m.answer("⛔️ Faqat adminlar uchun!")
     bugun = datetime.now().strftime("%d.%m")
     tikilgan = conn.execute("SELECT SUM(soni) FROM bitgan_ishlar WHERE sana=?", (bugun,)).fetchone()[0] or 0
     razdacha = conn.execute("SELECT SUM(soni) FROM razdacha_ombor").fetchone()[0] or 0
@@ -1038,7 +1053,7 @@ async def admin_stats(m: types.Message):
     )
 
 # --- ADMIN: NARX BELGILASH HANDLERLARI ---
-@dp.message(F.text == "💰 Narx belgilash")
+@dp.message(F.text == "💰 Narx belgilash", StateFilter("*"))
 async def admin_narx_start(m: types.Message, state: FSMContext):
     conn = sqlite3.connect("fabrika.db")
     user = conn.execute("SELECT rol FROM hodimlar WHERE chat_id=?", (m.from_user.id,)).fetchone()
@@ -1072,8 +1087,9 @@ async def admin_narx_final(m: types.Message, state: FSMContext):
     await state.clear()
 
 # --- CHEVAR: BALANS ---
-@dp.message(F.text == "💰 Mening balansim")
-async def chevar_balans_hisob(m: types.Message):
+@dp.message(F.text == "💰 Mening balansim", StateFilter("*"))
+async def chevar_balans_hisob(m: types.Message, state: FSMContext):
+    await state.clear()
     conn = sqlite3.connect("fabrika.db")
     user = conn.execute("SELECT id, ism FROM hodimlar WHERE chat_id=?", (m.from_user.id,)).fetchone()
     if not user: return await m.answer("❌ Profil topilmadi.")
@@ -1197,8 +1213,9 @@ async def ch_qaytarish_4(m: types.Message, state: FSMContext):
     await state.clear()
 
 # --- RAZDACHA: BITGAN ISHLAR TARIXI ---
-@dp.message(F.text == "📜 Bitgan ishlar tarixi")
-async def raz_tarix(m: types.Message):
+@dp.message(F.text == "📜 Bitgan ishlar tarixi", StateFilter("*"))
+async def raz_tarix(m: types.Message, state: FSMContext):
+    await state.clear()
     conn = sqlite3.connect("fabrika.db")
     rows = conn.execute("""
         SELECT b.sana, h.ism, b.model_nomi, b.kodi, b.razmer, b.soni
@@ -1221,18 +1238,7 @@ async def raz_tarix(m: types.Message):
 
 # --- ASOSIY ISHGA TUSHIRISH FUNKSIYASI (Yagona va To'g'ri variant) ---
 async def main():
-    # 1. Bazani majburiy yangilash (sana ustunini qo'shish)
-    conn = sqlite3.connect("fabrika.db")
-    try:
-        conn.execute("ALTER TABLE hodimlar ADD COLUMN sana TEXT DEFAULT CURRENT_TIMESTAMP")
-        conn.commit()
-        print("✅ 'sana' ustuni muvaffaqiyatli tekshirildi.")
-    except sqlite3.OperationalError:
-        print("ℹ️ 'sana' ustuni allaqachon mavjud.")
-    finally:
-        conn.close()
-
-    # 2. Jadvallarni yaratish/tekshirish
+    # 1. Jadvallarni yaratish/tekshirish
     init_db()
 
     # 3. Backup tizimi
