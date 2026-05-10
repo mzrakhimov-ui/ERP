@@ -54,6 +54,11 @@ class ChevarState(StatesGroup):
     ish_tanlash = State()
     topshirish_soni = State()
 
+class ChevarQaytarishState(StatesGroup):
+    ish_tanlash = State()
+    miqdor      = State()
+    sabab       = State()
+
 # --- DATABASE ---
 def init_db():
     conn = sqlite3.connect("fabrika.db")
@@ -86,17 +91,31 @@ def init_db():
         soni INTEGER, holat TEXT, sana TEXT
     )''')
     
-    # --- YANGI QO'SHILGAN QISM: TARIFLAR JADVALI ---
     cursor.execute('''CREATE TABLE IF NOT EXISTS tariflar (
-        bichuv_id TEXT PRIMARY KEY, 
+        bichuv_id TEXT PRIMARY KEY,
         narx INTEGER DEFAULT 0)''')
-    # -----------------------------------------------
-    
-    # MAVJUD BAZAGA 'SANA' USTUNINI QO'SHISH (Bazani o'chirmasdan yangilash)
-    try:
-        cursor.execute("ALTER TABLE hodimlar ADD COLUMN sana TEXT DEFAULT CURRENT_TIMESTAMP")
-    except sqlite3.OperationalError:
-        pass # Ustun allaqachon bor bo'lsa xato bermaydi
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS qaytarish_sorovi (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ish_id INTEGER,
+        chevar_id INTEGER,
+        miqdor INTEGER,
+        sabab TEXT,
+        vaqt TEXT,
+        holat TEXT DEFAULT 'ochiq'
+    )''')
+
+    # Mavjud bazaga yangi ustunlar qo'shish (xavfsiz)
+    for migration in [
+        "ALTER TABLE hodimlar ADD COLUMN sana TEXT DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE ishlar ADD COLUMN biriktirgan_id INTEGER",
+        "ALTER TABLE ishlar ADD COLUMN qabul_vaqt TEXT",
+        "ALTER TABLE ishlar ADD COLUMN rad_sababi TEXT",
+    ]:
+        try:
+            cursor.execute(migration)
+        except sqlite3.OperationalError:
+            pass
 
     users = [
         (445178136, 'admin710', 'Boshliq', 'admin'), 
@@ -124,11 +143,11 @@ def get_main_menu(rol, user_id=None):
         kb.row(types.KeyboardButton(text="📥 Bichuvdan ish olish"), types.KeyboardButton(text="✂️ Chevarga ish berish"))
         kb.row(types.KeyboardButton(text="🏁 Chevardan ish olish"), types.KeyboardButton(text="📦 Ombor holati"))
         kb.row(types.KeyboardButton(text="⏳ Kutilayotgan ishlar")) 
-        kb.row(types.KeyboardButton(text="🧵 Chevarlardagi ishlar"), types.KeyboardButton(text="📜 Bitgan ishlar tarixi"))
+        kb.row(types.KeyboardButton(text="🧵 Tikuvdagi topshiriqlar"), types.KeyboardButton(text="📜 Bitgan ishlar tarixi"))
     elif rol == 'chevar':
-        # Chevar tugmalari chiroyli turishi uchun 2 qatorga bo'lindi
         kb.row(types.KeyboardButton(text="📥 Qabul uchun ishlar"), types.KeyboardButton(text="🧵 Tikilayotgan ishlar"))
-        kb.row(types.KeyboardButton(text="📤 Ish topshirish"), types.KeyboardButton(text="💰 Mening balansim")) # <--- Chevar uchun balans tugmasi
+        kb.row(types.KeyboardButton(text="📤 Ish topshirish"), types.KeyboardButton(text="↩️ Ish qaytarish"))
+        kb.row(types.KeyboardButton(text="💰 Mening balansim"))
     
     kb.row(types.KeyboardButton(text="🏠 Asosiy sahifa"), types.KeyboardButton(text="🚪 Profildan chiqish"))
     return kb.as_markup(resize_keyboard=True)
@@ -487,7 +506,13 @@ async def raz_give_final(m: types.Message, state: FSMContext):
     if m.text == "✅ Xa":
         d = await state.get_data()
         conn = sqlite3.connect("fabrika.db")
-        conn.execute("INSERT INTO ishlar (model, kod, razmer, umumiy_soni, qolgan_soni, chevar_id, status, vaqt) VALUES (?,?,?,?,?,?,?,?)", (d['mod'], d['kod'], d['raz'], d['soni'], d['soni'], d['ch_id'], 'kutilmoqda', datetime.now().strftime("%d.%m %H:%M")))
+        biri = conn.execute("SELECT id FROM hodimlar WHERE chat_id=?", (m.from_user.id,)).fetchone()
+        biri_id = biri[0] if biri else None
+        conn.execute(
+            "INSERT INTO ishlar (model, kod, razmer, umumiy_soni, qolgan_soni, chevar_id, status, vaqt, biriktirgan_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            (d['mod'], d['kod'], d['raz'], d['soni'], d['soni'], d['ch_id'], 'kutilmoqda',
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S"), biri_id)
+        )
         conn.execute("UPDATE razdacha_ombor SET soni = soni - ? WHERE kod=? AND razmer=?", (d['soni'], d['kod'], d['raz']))
         conn.commit()
         conn.close()
@@ -525,37 +550,218 @@ async def raz_cancel_pending_work(cb: types.CallbackQuery):
         conn.close()
         await cb.answer("❌ Bu ish allaqachon bekor qilingan.", show_alert=True)
 
-@dp.message(F.text == "🧵 Chevarlardagi ishlar")
-async def raz_monitor_chevars(m: types.Message):
-    conn = sqlite3.connect("fabrika.db")
-    active_chevars = conn.execute("SELECT DISTINCT i.chevar_id, h.ism FROM ishlar i JOIN hodimlar h ON i.chevar_id = h.id WHERE i.qolgan_soni > 0 AND i.status IN ('tikilmoqda', 'topshirildi_kutilmoqda')").fetchall()
-    conn.close()
-    if not active_chevars: return await m.answer("📭 Hozircha chevarlarda ish yo'q.")
+@dp.message(F.text == "🧵 Tikuvdagi topshiriqlar")
+async def raz_tikuv_menu(m: types.Message):
     kb = InlineKeyboardBuilder()
-    for ch in active_chevars: kb.row(types.InlineKeyboardButton(text=f"👤 {ch[1]}", callback_data=f"raz_mon_{ch[0]}"))
-    await m.answer("🧵 Ishi bor chevarlar:", reply_markup=kb.as_markup())
+    kb.row(
+        types.InlineKeyboardButton(text="📋 Ro'yxat", callback_data="tikuv_royxat_0"),
+        types.InlineKeyboardButton(text="🔄 Qaytarish so'rovlari", callback_data="tikuv_qaytarish"),
+    )
+    await m.answer("🧵 **Tikuvdagi topshiriqlar**\n\nKerakli bo'limni tanlang:", parse_mode="Markdown", reply_markup=kb.as_markup())
 
-@dp.callback_query(F.data.startswith("raz_mon_"))
-async def raz_show_chevar_details(cb: types.CallbackQuery):
-    ch_id = cb.data.replace("raz_mon_", "")
+@dp.callback_query(F.data.startswith("tikuv_royxat_"))
+async def tikuv_royxat_cb(cb: types.CallbackQuery):
+    page = int(cb.data.replace("tikuv_royxat_", ""))
+    per_page = 8
     conn = sqlite3.connect("fabrika.db")
-    result = conn.execute("SELECT ism FROM hodimlar WHERE id=?", (ch_id,)).fetchone()
-    if not result:
+    chevars = conn.execute("""
+        SELECT i.chevar_id, h.ism, COUNT(i.id), SUM(i.qolgan_soni)
+        FROM ishlar i JOIN hodimlar h ON i.chevar_id = h.id
+        WHERE i.qolgan_soni > 0 AND i.status IN ('tikilmoqda','topshirildi_kutilmoqda')
+        GROUP BY i.chevar_id
+    """).fetchall()
+    conn.close()
+    if not chevars:
+        return await cb.message.edit_text("📭 Hozircha chevarlarda ish yo'q.")
+    total = len(chevars)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    chunk = chevars[page * per_page:(page + 1) * per_page]
+    kb = InlineKeyboardBuilder()
+    for ch in chunk:
+        kb.row(types.InlineKeyboardButton(
+            text=f"🧵 ID {ch[0]} | {ch[1]} | Topshiriq: {ch[2]} ta | Qolgan: {ch[3]} ta",
+            callback_data=f"ch_detail_{ch[0]}"
+        ))
+    nav = []
+    if page > 0:
+        nav.append(types.InlineKeyboardButton(text="◀ Oldingi", callback_data=f"tikuv_royxat_{page-1}"))
+    if page < total_pages - 1:
+        nav.append(types.InlineKeyboardButton(text="Keyingi ▶", callback_data=f"tikuv_royxat_{page+1}"))
+    if nav:
+        kb.row(*nav)
+    txt = f"📋 **Ro'yxat**\nAktual ishi bor chevarlar\nSahifa: {page+1}/{total_pages} | Jami: {total} ta"
+    await cb.message.edit_text(txt, parse_mode="Markdown", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("ch_detail_"))
+async def ch_detail_cb(cb: types.CallbackQuery):
+    ch_id = cb.data.replace("ch_detail_", "")
+    conn = sqlite3.connect("fabrika.db")
+    r = conn.execute("SELECT ism FROM hodimlar WHERE id=?", (ch_id,)).fetchone()
+    if not r:
         conn.close()
         return await cb.answer("❌ Chevar topilmadi!", show_alert=True)
-    ism = result[0]
+    ism = r[0]
     works = conn.execute(
-        "SELECT model, kod, razmer, qolgan_soni, status, topshirildi_soni FROM ishlar WHERE chevar_id=? AND qolgan_soni > 0",
+        "SELECT id, model, razmer, qolgan_soni FROM ishlar WHERE chevar_id=? AND qolgan_soni > 0 AND status IN ('tikilmoqda','topshirildi_kutilmoqda')",
         (ch_id,)
     ).fetchall()
     conn.close()
-    txt = f"📊 **{ism} dagi faol ishlar:**\n\n"
+    count = len(works)
+    total_q = sum(w[3] for w in works)
+    kb = InlineKeyboardBuilder()
     for w in works:
-        if w[4] == 'topshirildi_kutilmoqda':
-            txt += f"📤 {w[0]} ({w[1]}) | R:{w[2]} | **{w[5]} ta topshirilgan** ({w[3]} ta qoldi)\n"
-        else:
-            txt += f"🧵 {w[0]} ({w[1]}) | R:{w[2]} | **{w[3]} ta** tikishda\n"
-    await cb.message.answer(txt, parse_mode="Markdown")
+        kb.row(types.InlineKeyboardButton(
+            text=f"🧵 {w[1]} | BR {w[0]} | {w[2]} R | {w[3]} ta",
+            callback_data=f"topshiriq_karta_{w[0]}"
+        ))
+    kb.row(types.InlineKeyboardButton(text="◀ Orqaga", callback_data="tikuv_royxat_0"))
+    txt = (f"🧵 **Chevar bo'yicha aktiv ishlar**\n\n"
+           f"👤 Chevar: {ism}\n🆔 Login ID: {ch_id}\n"
+           f"📌 Aktiv topshiriq: {count} ta\n🧵 Jami qolgan: {total_q} ta\n\n"
+           f"Kerakli topshiriqni tanlang:")
+    await cb.message.edit_text(txt, parse_mode="Markdown", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("topshiriq_karta_"))
+async def topshiriq_karta_cb(cb: types.CallbackQuery):
+    ish_id = int(cb.data.replace("topshiriq_karta_", ""))
+    conn = sqlite3.connect("fabrika.db")
+    ish = conn.execute(
+        "SELECT model, kod, razmer, umumiy_soni, qolgan_soni, chevar_id, status, vaqt, biriktirgan_id, qabul_vaqt FROM ishlar WHERE id=?",
+        (ish_id,)
+    ).fetchone()
+    if not ish:
+        conn.close()
+        return await cb.answer("❌ Topshiriq topilmadi!", show_alert=True)
+    ch_r = conn.execute("SELECT ism FROM hodimlar WHERE id=?", (ish[5],)).fetchone()
+    ch_ism = ch_r[0] if ch_r else f"ID:{ish[5]}"
+    biri_ism = "—"
+    if ish[8]:
+        br = conn.execute("SELECT ism FROM hodimlar WHERE id=?", (ish[8],)).fetchone()
+        if br:
+            biri_ism = f"{br[0]} (ID:{ish[8]})"
+    qaytgan = conn.execute(
+        "SELECT COALESCE(SUM(miqdor),0) FROM qaytarish_sorovi WHERE ish_id=? AND holat='qabul'", (ish_id,)
+    ).fetchone()[0]
+    qs = conn.execute(
+        "SELECT miqdor, sabab, vaqt FROM qaytarish_sorovi WHERE ish_id=? AND holat='ochiq' ORDER BY id DESC LIMIT 1",
+        (ish_id,)
+    ).fetchone()
+    conn.close()
+    holat_map = {
+        'kutilmoqda':             '⏳ Razdacha tasdig\'ini kutmoqda',
+        'tikilmoqda':             '🧵 Tikish jarayonida',
+        'topshirildi_kutilmoqda': '📤 Topshirildi — qabul kutilmoqda',
+        'yakunlandi':             '✅ Yakunlandi',
+    }
+    holat_txt = holat_map.get(ish[6], ish[6])
+    qabul_txt = ish[9] if ish[9] else "—"
+    txt = (f"📌 **Topshiriq kartasi**\n\n"
+           f"👗 {ish[0]}  |  🔢 BR:{ish_id}  |  Kod:{ish[1]}  |  R:{ish[2]}\n"
+           f"👤 Chevar: {ch_ism}\n"
+           f"👤 Biriktirgan: {biri_ism}\n\n"
+           f"📦 **Miqdorlar:**\n"
+           f"   📦 Berilgan:       {ish[3]} ta\n"
+           f"   ↩️ Qaytgan jami:   {qaytgan} ta\n"
+           f"   🧵 Hali qolgan:    {ish[4]} ta\n\n"
+           f"⚡ Holat: {holat_txt}\n"
+           f"🕒 Biriktirilgan: {ish[7]}\n"
+           f"✅ Qabul qilingan: {qabul_txt}")
+    if qs:
+        qoladi = ish[4] - qs[0]
+        txt += (f"\n\n──────────────────────\n"
+                f"⚠️ **Qaytarish so'rovi: OCHIQ**\n"
+                f"   📦 Chevarda mavjud:      {ish[4]} ta\n"
+                f"   ↩️ Qaytarish so'ralgan:  {qs[0]} ta\n"
+                f"   📌 Qabul bo'lsa qoladi:  {qoladi} ta\n"
+                f"   📝 Sabab: {qs[1]}\n"
+                f"   🕒 So'rov vaqti: {qs[2]}")
+    kb = InlineKeyboardBuilder()
+    kb.row(types.InlineKeyboardButton(text="◀ Orqaga", callback_data=f"ch_detail_{ish[5]}"))
+    await cb.message.edit_text(txt, parse_mode="Markdown", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data == "tikuv_qaytarish")
+async def tikuv_qaytarish_cb(cb: types.CallbackQuery):
+    conn = sqlite3.connect("fabrika.db")
+    rows = conn.execute("""
+        SELECT qs.id, h.ism, i.model, i.id, i.kod, i.razmer, qs.miqdor, i.qolgan_soni, qs.sabab, qs.vaqt
+        FROM qaytarish_sorovi qs
+        JOIN ishlar i ON qs.ish_id = i.id
+        JOIN hodimlar h ON qs.chevar_id = h.id
+        WHERE qs.holat='ochiq'
+        ORDER BY qs.id DESC
+    """).fetchall()
+    conn.close()
+    if not rows:
+        return await cb.message.edit_text("✅ Ochiq qaytarish so'rovlari yo'q.")
+    kb = InlineKeyboardBuilder()
+    for r in rows:
+        kb.row(types.InlineKeyboardButton(
+            text=f"🔄 {r[1]} | {r[2]} | {r[6]} ta",
+            callback_data=f"qs_detail_{r[0]}"
+        ))
+    kb.row(types.InlineKeyboardButton(text="◀ Orqaga", callback_data="tikuv_royxat_0"))
+    txt = f"🔄 **Qaytarish so'rovlari**\n\nOchiq so'rovlar: {len(rows)} ta"
+    await cb.message.edit_text(txt, parse_mode="Markdown", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("qs_detail_"))
+async def qs_detail_cb(cb: types.CallbackQuery):
+    qs_id = cb.data.replace("qs_detail_", "")
+    conn = sqlite3.connect("fabrika.db")
+    r = conn.execute("""
+        SELECT qs.id, h.ism, qs.chevar_id, i.model, i.id, i.kod, i.razmer, qs.miqdor, i.qolgan_soni, qs.sabab, qs.vaqt
+        FROM qaytarish_sorovi qs
+        JOIN ishlar i ON qs.ish_id = i.id
+        JOIN hodimlar h ON qs.chevar_id = h.id
+        WHERE qs.id=?
+    """, (qs_id,)).fetchone()
+    conn.close()
+    if not r:
+        return await cb.answer("❌ So'rov topilmadi!", show_alert=True)
+    qoladi = r[8] - r[7]
+    txt = (f"🔄 **Qaytarish so'rovi**\n\n"
+           f"👤 {r[1]} (ID:{r[2]})\n"
+           f"👗 {r[3]} | BR:{r[4]} | Kod:{r[5]} | R:{r[6]}\n\n"
+           f"📦 Chevarda mavjud:      {r[8]} ta\n"
+           f"↩️ Qaytarish so'ralgan:  {r[7]} ta\n"
+           f"📌 Qabul bo'lsa qoladi:  {qoladi} ta\n\n"
+           f"📝 Sabab: {r[9]}\n"
+           f"🕒 Vaqt: {r[10]}")
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        types.InlineKeyboardButton(text="✅ Qabul", callback_data=f"qs_qabul_{qs_id}"),
+        types.InlineKeyboardButton(text="❌ Rad", callback_data=f"qs_rad_{qs_id}"),
+    )
+    kb.row(types.InlineKeyboardButton(text="◀ Orqaga", callback_data="tikuv_qaytarish"))
+    await cb.message.edit_text(txt, parse_mode="Markdown", reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("qs_qabul_"))
+async def qs_qabul_cb(cb: types.CallbackQuery):
+    qs_id = int(cb.data.replace("qs_qabul_", ""))
+    conn = sqlite3.connect("fabrika.db")
+    qs = conn.execute("SELECT ish_id, miqdor FROM qaytarish_sorovi WHERE id=? AND holat='ochiq'", (qs_id,)).fetchone()
+    if not qs:
+        conn.close()
+        return await cb.answer("❌ So'rov topilmadi yoki allaqachon ko'rib chiqilgan!", show_alert=True)
+    ish_id, miqdor = qs
+    ish = conn.execute("SELECT qolgan_soni, kod, razmer FROM ishlar WHERE id=?", (ish_id,)).fetchone()
+    new_q = ish[0] - miqdor
+    new_status = 'yakunlandi' if new_q <= 0 else 'tikilmoqda'
+    conn.execute("UPDATE ishlar SET qolgan_soni=?, status=? WHERE id=?", (max(0, new_q), new_status, ish_id))
+    conn.execute("UPDATE razdacha_ombor SET soni = soni + ? WHERE kod=? AND razmer=?", (miqdor, ish[1], ish[2]))
+    conn.execute("UPDATE qaytarish_sorovi SET holat='qabul' WHERE id=?", (qs_id,))
+    conn.commit()
+    conn.close()
+    await cb.message.edit_text(f"✅ Qaytarish qabul qilindi. {miqdor} ta omborga qaytarildi.")
+
+@dp.callback_query(F.data.startswith("qs_rad_"))
+async def qs_rad_cb(cb: types.CallbackQuery):
+    qs_id = cb.data.replace("qs_rad_", "")
+    conn = sqlite3.connect("fabrika.db")
+    conn.execute("UPDATE qaytarish_sorovi SET holat='rad' WHERE id=?", (qs_id,))
+    conn.commit()
+    conn.close()
+    await cb.message.edit_text("❌ Qaytarish so'rovi rad etildi.")
 
 # ================= CHEVAR BO'LIMI (TO'LIQ TUZATILGAN) =================
 
@@ -702,7 +908,10 @@ async def ch_top_3(m: types.Message, state: FSMContext):
 async def process_ch_accept(cb: types.CallbackQuery):
     ish_id = cb.data.replace("ch_accept_work_", "")
     conn = sqlite3.connect("fabrika.db")
-    conn.execute("UPDATE ishlar SET status = 'tikilmoqda' WHERE id = ?", (ish_id,))
+    conn.execute(
+        "UPDATE ishlar SET status='tikilmoqda', qabul_vaqt=? WHERE id=?",
+        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ish_id)
+    )
     conn.commit()
     conn.close()
     await cb.answer("Ish qabul qilindi!")
@@ -890,6 +1099,102 @@ async def chevar_balans_hisob(m: types.Message):
             txt += f"• {r[0]} ({r[1]}): {r[2]} ta × narx belgilanmagan\n"
     txt += f"\n💰 Jami balans: {total:,} so'm"
     await m.answer(txt)
+
+# --- CHEVAR: ISH QAYTARISH ---
+@dp.message(F.text == "↩️ Ish qaytarish", StateFilter("*"))
+async def ch_qaytarish_1(m: types.Message, state: FSMContext):
+    await state.clear()
+    conn = sqlite3.connect("fabrika.db")
+    user = conn.execute("SELECT id FROM hodimlar WHERE chat_id=?", (m.from_user.id,)).fetchone()
+    if not user:
+        conn.close()
+        return await m.answer("❌ Profil topilmadi.")
+    ishlar = conn.execute(
+        "SELECT id, model, razmer, qolgan_soni FROM ishlar WHERE chevar_id=? AND status='tikilmoqda' AND qolgan_soni > 0",
+        (user[0],)
+    ).fetchall()
+    conn.close()
+    if not ishlar:
+        return await m.answer("📭 Qaytarish uchun faol ish yo'q.")
+    kb = ReplyKeyboardBuilder()
+    for i in ishlar:
+        kb.add(types.KeyboardButton(text=f"ID:{i[0]} | {i[1]} R:{i[2]}"))
+    kb.row(types.KeyboardButton(text="🏠 Asosiy sahifa")).adjust(1)
+    await state.set_state(ChevarQaytarishState.ish_tanlash)
+    await m.answer("↩️ Qaytarish uchun ish tanlang:", reply_markup=kb.as_markup(resize_keyboard=True))
+
+@dp.message(ChevarQaytarishState.ish_tanlash)
+async def ch_qaytarish_2(m: types.Message, state: FSMContext):
+    if m.text == "🏠 Asosiy sahifa":
+        await state.clear()
+        return await back_to_main(m, state)
+    if "ID:" not in m.text:
+        return await m.answer("⚠️ Iltimos, menudan tanlang!")
+    try:
+        ish_id = int(m.text.split("|")[0].replace("ID:", "").strip())
+    except (ValueError, IndexError):
+        return await m.answer("❌ Xatolik. Qaytadan urinib ko'ring.")
+    conn = sqlite3.connect("fabrika.db")
+    ish = conn.execute("SELECT qolgan_soni, model, kod, razmer FROM ishlar WHERE id=?", (ish_id,)).fetchone()
+    conn.close()
+    if not ish:
+        return await m.answer("❌ Ish topilmadi.")
+    await state.update_data(ish_id=ish_id, qolgan_soni=ish[0], model=ish[1], kod=ish[2], razmer=ish[3])
+    await state.set_state(ChevarQaytarishState.miqdor)
+    await m.answer(f"🔢 Necha tani qaytarmoqchisiz?\n(Maksimal: {ish[0]} ta)", reply_markup=back_kb())
+
+@dp.message(ChevarQaytarishState.miqdor)
+async def ch_qaytarish_3(m: types.Message, state: FSMContext):
+    if m.text == "🏠 Asosiy sahifa":
+        await state.clear()
+        return await back_to_main(m, state)
+    if not m.text.isdigit() or int(m.text) <= 0:
+        return await m.answer("⚠️ Faqat musbat raqam kiriting!")
+    data = await state.get_data()
+    miqdor = int(m.text)
+    if miqdor > data['qolgan_soni']:
+        return await m.answer(f"❌ Maksimal {data['qolgan_soni']} ta qaytarish mumkin!")
+    await state.update_data(miqdor=miqdor)
+    await state.set_state(ChevarQaytarishState.sabab)
+    await m.answer("📝 Qaytarish sababini yozing (sabab yo'q bo'lsa — yozing):", reply_markup=back_kb())
+
+@dp.message(ChevarQaytarishState.sabab)
+async def ch_qaytarish_4(m: types.Message, state: FSMContext):
+    if m.text == "🏠 Asosiy sahifa":
+        await state.clear()
+        return await back_to_main(m, state)
+    data = await state.get_data()
+    vaqt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect("fabrika.db")
+    user = conn.execute("SELECT id FROM hodimlar WHERE chat_id=?", (m.from_user.id,)).fetchone()
+    chevar_id = user[0] if user else None
+    conn.execute(
+        "INSERT INTO qaytarish_sorovi (ish_id, chevar_id, miqdor, sabab, vaqt) VALUES (?,?,?,?,?)",
+        (data['ish_id'], chevar_id, data['miqdor'], m.text, vaqt)
+    )
+    conn.commit()
+    # Razdachaga xabar yuborish
+    razdacha = conn.execute("SELECT chat_id, ism FROM hodimlar WHERE rol='razdacha' AND chat_id IS NOT NULL").fetchone()
+    ch_ism = conn.execute("SELECT ism FROM hodimlar WHERE id=?", (chevar_id,)).fetchone()
+    conn.close()
+    if razdacha and razdacha[0]:
+        qoladi = data['qolgan_soni'] - data['miqdor']
+        notif = (
+            f"🔄 **Qaytarish so'rovi keldi!**\n\n"
+            f"👤 {ch_ism[0] if ch_ism else chevar_id} (ID:{chevar_id})\n"
+            f"👗 {data['model']} | BR:{data['ish_id']} | Kod:{data['kod']} | R:{data['razmer']}\n\n"
+            f"📦 Chevarda mavjud:      {data['qolgan_soni']} ta\n"
+            f"↩️ Qaytarish so'ralgan:  {data['miqdor']} ta\n"
+            f"📌 Qabul bo'lsa qoladi:  {qoladi} ta\n\n"
+            f"📝 Sabab: {m.text}\n"
+            f"🕒 Vaqt: {vaqt}"
+        )
+        try:
+            await bot.send_message(razdacha[0], notif, parse_mode="Markdown")
+        except Exception:
+            pass
+    await m.answer("✅ Qaytarish so'rovingiz yuborildi. Razdacha ko'rib chiqadi.", reply_markup=get_main_menu('chevar'))
+    await state.clear()
 
 # --- RAZDACHA: BITGAN ISHLAR TARIXI ---
 @dp.message(F.text == "📜 Bitgan ishlar tarixi")
