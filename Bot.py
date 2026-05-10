@@ -539,13 +539,22 @@ async def raz_monitor_chevars(m: types.Message):
 async def raz_show_chevar_details(cb: types.CallbackQuery):
     ch_id = cb.data.replace("raz_mon_", "")
     conn = sqlite3.connect("fabrika.db")
-    ism = conn.execute("SELECT ism FROM hodimlar WHERE id=?", (ch_id,)).fetchone()[0]
-    works = conn.execute("SELECT model, kod, razmer, qolgan_soni, status FROM ishlar WHERE chevar_id=? AND qolgan_soni > 0", (ch_id,)).fetchall()
+    result = conn.execute("SELECT ism FROM hodimlar WHERE id=?", (ch_id,)).fetchone()
+    if not result:
+        conn.close()
+        return await cb.answer("❌ Chevar topilmadi!", show_alert=True)
+    ism = result[0]
+    works = conn.execute(
+        "SELECT model, kod, razmer, qolgan_soni, status, topshirildi_soni FROM ishlar WHERE chevar_id=? AND qolgan_soni > 0",
+        (ch_id,)
+    ).fetchall()
     conn.close()
     txt = f"📊 **{ism} dagi faol ishlar:**\n\n"
     for w in works:
-        emoji = "⏳" if w[4] == 'topshirildi_kutilmoqda' else "🧵"
-        txt += f"{emoji} {w[0]} ({w[1]}) | R:{w[2]} | **{w[3]} ta** qoldi\n"
+        if w[4] == 'topshirildi_kutilmoqda':
+            txt += f"📤 {w[0]} ({w[1]}) | R:{w[2]} | **{w[5]} ta topshirilgan** ({w[3]} ta qoldi)\n"
+        else:
+            txt += f"🧵 {w[0]} ({w[1]}) | R:{w[2]} | **{w[3]} ta** tikishda\n"
     await cb.message.answer(txt, parse_mode="Markdown")
 
 # ================= CHEVAR BO'LIMI (TO'LIQ TUZATILGAN) =================
@@ -609,10 +618,10 @@ async def show_active_works(m: types.Message, state: FSMContext):
     
     txt = "🧵 **Sizdagi ishlar holati:**\n\n"
     for w in works:
-        if w[4] == 'topshirildi_kutilmoqda': 
-            txt += f"⏳ {w[0]} | R:{w[2]} | **{w[5]} ta** (Kutilmoqda)\n"
-        else: 
-            txt += f"🧵 {w[0]} | R:{w[2]} | **{w[3]} ta** (Qo'lingizda)\n"
+        if w[4] == 'topshirildi_kutilmoqda':
+            txt += f"📤 {w[0]} | R:{w[2]} | **{w[5]} ta topshirildi** — razdacha tasdig'ini kutmoqda\n"
+        else:
+            txt += f"🧵 {w[0]} | R:{w[2]} | **{w[3]} ta** — tikish jarayonida\n"
         txt += "------------------------\n"
     await m.answer(txt, parse_mode="Markdown")
 
@@ -811,11 +820,22 @@ async def admin_stats(m: types.Message):
     razdacha = conn.execute("SELECT SUM(soni) FROM razdacha_ombor").fetchone()[0] or 0
     bichuv = conn.execute("SELECT SUM(soni) FROM bichuv_ombor WHERE status=0").fetchone()[0] or 0
     conn.close()
-    await m.answer(f"📊 Bugungi ({bugun}) hisobot:\n✅ Qabul qilindi: {tikilgan} ta\n📦 Razdacha ombori: {razdacha} ta\n✂️ Bichuvda yangi: {bichuv} ta")
+    await m.answer(
+        f"📊 **Bugungi ({bugun}) hisobot:**\n\n"
+        f"✅ Bugun razdacha qabul qildi: {tikilgan} ta\n"
+        f"📦 Razdacha omborida (jami): {razdacha} ta\n"
+        f"✂️ Bichuvdan kelmagan (jami): {bichuv} ta",
+        parse_mode="Markdown"
+    )
 
 # --- ADMIN: NARX BELGILASH HANDLERLARI ---
 @dp.message(F.text == "💰 Narx belgilash")
 async def admin_narx_start(m: types.Message, state: FSMContext):
+    conn = sqlite3.connect("fabrika.db")
+    user = conn.execute("SELECT rol FROM hodimlar WHERE chat_id=?", (m.from_user.id,)).fetchone()
+    conn.close()
+    if not user or user[0] != 'admin':
+        return await m.answer("⛔️ Faqat adminlar uchun!")
     await state.set_state(NarxState.bichuv_id)
     await m.answer("🔢 Narx belgilash uchun **Bichuv kodini** kiriting (masalan: 101):", parse_mode="Markdown")
 
@@ -859,8 +879,40 @@ async def chevar_balans_hisob(m: types.Message):
     conn.close()
     if not rows: return await m.answer("📭 Bitgan ishlar yo'q.")
     
-    total = sum(r[2] * r[3] for r in rows)
-    await m.answer(f"👤 {user[1]}\n💰 Jami balans: {total:,} so'm")
+    txt = f"👤 {user[1]}\n\n📋 Modellar bo'yicha:\n"
+    total = 0
+    for r in rows:
+        summa = r[2] * r[3]
+        total += summa
+        if r[3] > 0:
+            txt += f"• {r[0]} ({r[1]}): {r[2]} ta × {r[3]:,} so'm = {summa:,} so'm\n"
+        else:
+            txt += f"• {r[0]} ({r[1]}): {r[2]} ta × narx belgilanmagan\n"
+    txt += f"\n💰 Jami balans: {total:,} so'm"
+    await m.answer(txt)
+
+# --- RAZDACHA: BITGAN ISHLAR TARIXI ---
+@dp.message(F.text == "📜 Bitgan ishlar tarixi")
+async def raz_tarix(m: types.Message):
+    conn = sqlite3.connect("fabrika.db")
+    rows = conn.execute("""
+        SELECT b.sana, h.ism, b.model_nomi, b.kodi, b.razmer, b.soni
+        FROM bitgan_ishlar b
+        JOIN hodimlar h ON b.chevar_id = h.id
+        ORDER BY b.sana DESC, b.id DESC
+        LIMIT 50
+    """).fetchall()
+    conn.close()
+    if not rows:
+        return await m.answer("📭 Tarix bo'sh.")
+    txt = "📜 **Bitgan ishlar tarixi (so'nggi 50):**\n"
+    curr_sana = ""
+    for r in rows:
+        if r[0] != curr_sana:
+            txt += f"\n📅 **{r[0]}**\n"
+            curr_sana = r[0]
+        txt += f"  👤 {r[1]} | {r[2]} ({r[3]}) R:{r[4]} — {r[5]} ta\n"
+    await m.answer(txt, parse_mode="Markdown")
 
 # --- ASOSIY ISHGA TUSHIRISH FUNKSIYASI (Yagona va To'g'ri variant) ---
 async def main():
