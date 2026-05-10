@@ -813,10 +813,6 @@ async def admin_stats(m: types.Message):
     conn.close()
     await m.answer(f"📊 Bugungi ({bugun}) hisobot:\n✅ Qabul qilindi: {tikilgan} ta\n📦 Razdacha ombori: {razdacha} ta\n✂️ Bichuvda yangi: {bichuv} ta")
 
-# ================= ASOSIY VA STATISTIKA =================
-
-@dp.message(F.text == "📦 Ombor holati")
-
 # --- ADMIN: NARX BELGILASH HANDLERLARI ---
 @dp.message(F.text == "💰 Narx belgilash")
 async def admin_narx_start(m: types.Message, state: FSMContext):
@@ -865,33 +861,6 @@ async def chevar_balans_hisob(m: types.Message):
     
     total = sum(r[2] * r[3] for r in rows)
     await m.answer(f"👤 {user[1]}\n💰 Jami balans: {total:,} so'm")
-
-async def raz_ombor_status(m: types.Message):
-    conn = sqlite3.connect("fabrika.db")
-    items = conn.execute("SELECT model, kod, razmer, soni FROM razdacha_ombor WHERE soni > 0 ORDER BY model ASC").fetchall()
-    conn.close()
-    if not items: 
-        return await m.answer("📭 Ombor bo'sh.")
-    
-    txt, curr = "📦 **Razdacha ombori:**\n", ""
-    for i in items:
-        if curr != i[0]:
-            txt += f"\n👗 **{i[0]} ({i[1]}):**\n"
-            curr = i[0]
-        txt += f"   • R:{i[2]} — {i[3]} ta\n"
-    await m.answer(txt, parse_mode="Markdown")
-
-@dp.message(F.text == "📊 Kunlik malumotlar")
-async def admin_stats(m: types.Message):
-    conn = sqlite3.connect("fabrika.db")
-    bugun = datetime.now().strftime("%d.%m")
-    tikilgan = conn.execute("SELECT SUM(soni) FROM bitgan_ishlar WHERE sana=?", (bugun,)).fetchone()[0] or 0
-    razdacha = conn.execute("SELECT SUM(soni) FROM razdacha_ombor").fetchone()[0] or 0
-    bichuv = conn.execute("SELECT SUM(soni) FROM JSON_EXTRACT(bichuv_ombor, '$') WHERE status=0").fetchone()[0] or 0 # Agar jadvalda xato bo'lsa oddiy SELECT ishlating
-    # Pastdagi qatorni ishlating agar yuqoridagida xato bersa:
-    # bichuv = conn.execute("SELECT SUM(soni) FROM bichuv_ombor WHERE status=0").fetchone()[0] or 0
-    conn.close()
-    await m.answer(f"📊 Bugungi ({bugun}) hisobot:\n✅ Qabul qilindi: {tikilgan} ta\n📦 Razdacha ombori: {razdacha} ta\n✂️ Bichuvda yangi: {bichuv} ta")
 
 # --- ASOSIY ISHGA TUSHIRISH FUNKSIYASI (Yagona va To'g'ri variant) ---
 async def main():
